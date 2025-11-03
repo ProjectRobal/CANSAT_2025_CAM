@@ -50,7 +50,7 @@ enum LED_STATUS_BITS
 
 void set_status(enum LED_STATUS_BITS status);
 
-static uint8_t framebuffer_static[320*240 / 5]={0};
+static uint8_t framebuffer_static[640*480 / 5]={0};
 
 QueueHandle_t uart_queue;
 
@@ -76,8 +76,6 @@ void app_main(void)
 
     xTaskCreate(error_led_task,"LED",4096,NULL,configMAX_PRIORITIES - 1,&error_task);
     vTaskSuspend(error_task);
-
-    vTaskDelay(100/portTICK_PERIOD_MS);
 
     camera_config_t camera_config={
         .pin_pwdn=CAM_PWR_PIN,
@@ -105,7 +103,7 @@ void app_main(void)
         .pixel_format=PIXFORMAT_JPEG,
         .frame_size=FRAMESIZE_QVGA,
         
-        .jpeg_quality=20,
+        .jpeg_quality=45,
         .fb_count=10,
         .fb_location=CAMERA_FB_IN_PSRAM,
         .grab_mode=CAMERA_GRAB_LATEST,
@@ -122,16 +120,9 @@ void app_main(void)
         set_status(STATUS_OK);   
     }
 
-    //ledc_timer_pause(LEDC_LOW_SPEED_MODE,LEDC_TIMER_0);    
-
-    vTaskDelay(100/portTICK_PERIOD_MS);
-
-    //vTaskDelay(100/portTICK_PERIOD_MS);
-
     gpio_set_direction(FLASH_LIGH,GPIO_MODE_OUTPUT);
     gpio_set_level(FLASH_LIGH,0);
 
-    
     while(1)
     {
         TickType_t start=xTaskGetTickCount();
@@ -148,17 +139,18 @@ void app_main(void)
 
         // zwróci buffor na obraz
         esp_camera_fb_return(pic);
+
         
         taskYIELD();
     }
 
-    }
+}
 
 
 
 void init_uart()
 {
-    const size_t uart_buffer_size = ( sizeof(framebuffer_static) + HEADER_SIZE )*15;
+    const size_t uart_buffer_size = ( sizeof(framebuffer_static) + HEADER_SIZE )*3;
 
     ESP_ERROR_CHECK(uart_driver_install(UART_ID, uart_buffer_size, uart_buffer_size, 10, &uart_queue, 0));
 
@@ -167,12 +159,13 @@ void init_uart()
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
-        .rx_flow_ctrl_thresh = 122,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
     };
     
     // Configure UART parameters
     ESP_ERROR_CHECK(uart_param_config(UART_ID, &uart_config));
+
+    ESP_ERROR_CHECK(uart_set_mode(UART_ID,UART_MODE_UART));
     // Set UART pins
     ESP_ERROR_CHECK(uart_set_pin(UART_ID, UART_TX_PIN, GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC));
 }
@@ -192,9 +185,7 @@ void send_frame(camera_fb_t *pic)
 
     size_t frame_size = pic->len;
 
-    memcpy(framebuffer_static,pic->buf,frame_size);
-
-    uint32_t crc = crc32_le(0,framebuffer_static,frame_size);
+    uint32_t crc = crc32_le(0,pic->buf,frame_size);
 
     // frame size + crc
     uint8_t header[HEADER_SIZE];
@@ -212,7 +203,9 @@ void send_frame(camera_fb_t *pic)
     uart_write_bytes(UART_ID,(const char *)header,HEADER_SIZE);
 
     // send frame data
-    uart_write_bytes(UART_ID,(const char *)framebuffer_static,frame_size);
+    uart_write_bytes(UART_ID,(const char *)pic->buf,frame_size);
+
+    uart_flush(UART_ID);
 }
 
 
