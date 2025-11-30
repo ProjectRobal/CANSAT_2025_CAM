@@ -54,7 +54,7 @@ static uint8_t framebuffer_static[640*480 / 5]={0};
 
 QueueHandle_t uart_queue;
 
-void send_frame(camera_fb_t *pic);
+void send_frame(uint8_t* pic,size_t frame_size);
 
 TaskHandle_t error_task;
 
@@ -104,7 +104,7 @@ void app_main(void)
         .frame_size=FRAMESIZE_QVGA,
         
         .jpeg_quality=45,
-        .fb_count=10,
+        .fb_count=1,
         .fb_location=CAMERA_FB_IN_PSRAM,
         .grab_mode=CAMERA_GRAB_LATEST,
 
@@ -123,24 +123,32 @@ void app_main(void)
     gpio_set_direction(FLASH_LIGH,GPIO_MODE_OUTPUT);
     gpio_set_level(FLASH_LIGH,0);
 
+    size_t size = 0;
+
+    camera_fb_t *pic = esp_camera_fb_get();
+
+    size = pic->len;
+
+    memcpy(framebuffer_static,pic->buf,size);
+
+    esp_camera_fb_return(pic);
+
+    esp_camera_deinit();
+
     while(1)
     {
         TickType_t start=xTaskGetTickCount();
         // pobranie ostatniej przechwyconej klatki
-        camera_fb_t *pic = esp_camera_fb_get();
+        // camera_fb_t *pic = esp_camera_fb_get();
 
-        ESP_LOGI("MAIN", "Picture taken! Its size was: %zu bytes in time: %lu", pic->len,(xTaskGetTickCount()-start)*portTICK_PERIOD_MS);
-
-        start=xTaskGetTickCount();
         // wyślij obraz przez port szeregowy
-        send_frame(pic);
+        send_frame(framebuffer_static,size);
         // use pic->buf to access the image
         ESP_LOGI("MAIN", "Picture saved in time: %lu", (xTaskGetTickCount()-start)*portTICK_PERIOD_MS);
 
         // zwróci buffor na obraz
-        esp_camera_fb_return(pic);
+        // esp_camera_fb_return(pic);
 
-        
         taskYIELD();
     }
 
@@ -150,7 +158,7 @@ void app_main(void)
 
 void init_uart()
 {
-    const size_t uart_buffer_size = ( sizeof(framebuffer_static) + HEADER_SIZE )*3;
+    const size_t uart_buffer_size = 8192;
 
     ESP_ERROR_CHECK(uart_driver_install(UART_ID, uart_buffer_size, uart_buffer_size, 10, &uart_queue, 0));
 
@@ -172,7 +180,7 @@ void init_uart()
 
 
 // dodaje nową ramkę do obecnie otwartego pliku
-void send_frame(camera_fb_t *pic)
+void send_frame(uint8_t* pic,size_t frame_size)
 {
     if(pic == NULL)
     {
@@ -183,9 +191,8 @@ void send_frame(camera_fb_t *pic)
 
     ESP_LOGD("MOVIE","Sending frame to UART");
 
-    size_t frame_size = pic->len;
 
-    uint32_t crc = crc32_le(0,pic->buf,frame_size);
+    uint32_t crc = crc32_le(0,pic,frame_size);
 
     // frame size + crc
     uint8_t header[HEADER_SIZE];
@@ -203,7 +210,7 @@ void send_frame(camera_fb_t *pic)
     uart_write_bytes(UART_ID,(const char *)header,HEADER_SIZE);
 
     // send frame data
-    uart_write_bytes(UART_ID,(const char *)pic->buf,frame_size);
+    uart_write_bytes(UART_ID,(const char *)pic,frame_size);
 
     uart_flush(UART_ID);
 }
